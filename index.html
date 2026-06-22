@@ -216,7 +216,7 @@ input.txt,select.txt{font-family:inherit;font-size:14px;border:1px solid var(--l
 <div class="ctl htabs"><button id="htabPrev" onclick="setTab('prev')">5월</button><button id="htabBill" onclick="setTab('bill')">6월</button></div>
 <div class="ctl" id="teacherCtl"><label>선생님</label><select id="teacherSel" onchange="selTeacher(this.value)"></select></div>
 <div class="ctl"><label>정산월</label><button onclick="bumpMonth(-1)">&minus;</button><b id="bm">6월</b><button onclick="bumpMonth(1)">+</button></div>
-<div class="ctl" id="whoCtl" style="gap:8px"><span id="whoLabel" style="font-weight:800;font-size:13px"></span><button id="logoutBtn" onclick="logout()" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--sub)">로그아웃</button></div>
+<div class="ctl" id="whoCtl" style="gap:8px"><span id="whoLabel" style="font-weight:800;font-size:13px"></span><span id="syncStat" style="font-size:11px;color:var(--sub)"></span><button onclick="cloudRefresh()" title="시트에서 새로고침" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--mint-d)">새로고침</button><button id="logoutBtn" onclick="logout()" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--sub)">로그아웃</button></div>
 </div></header>
 <div class="layout"><div class="panel roster"><h2><span>학생 <span id="cnt"></span></span></h2><div id="roster"></div>
 <button class="add" onclick="addStudent()">+ 학생 추가</button>
@@ -252,7 +252,9 @@ const PINS={
 };
 let currentRole=null;
 let lgSel=null;
-function isAdmin(){return currentRole==="원장";}
+/* 관리자(마스터) 역할 — 모든 선생님 보기·수정 + 전체 정산표 */
+const ADMINS=["원장","이지영"];
+function isAdmin(){return ADMINS.includes(currentRole);}
 function renderLoginRoles(){
   document.getElementById('lgRoles').innerHTML=TEACHERS.map(t=>
     '<button class="lgrole'+(t===lgSel?' on':'')+'" onclick="pickRole(\''+t+'\')">'+t+'</button>').join('');
@@ -273,10 +275,11 @@ function doLogin(role){
   load();
   if(!isAdmin())curTeacher=role;        // 선생님은 본인 고정
   curStudent=null;
-  document.getElementById('whoLabel').textContent=role+(isAdmin()?' (원장)':' 선생님');
-  document.getElementById('teacherCtl').style.display=isAdmin()?'':'none';   // 원장만 선생님 전환
+  document.getElementById('whoLabel').textContent=role+(isAdmin()?' (관리자)':' 선생님');
+  document.getElementById('teacherCtl').style.display=isAdmin()?'':'none';   // 관리자만 선생님 전환
   const adminBtn=document.getElementById('adminBtn');if(adminBtn)adminBtn.style.display=isAdmin()?'':'none';
   render();initMobile();
+  cloudLoad();   // 구글 시트에서 최신 데이터 가져오기
 }
 function logout(){
   try{sessionStorage.removeItem('lesson_role');}catch(e){}
@@ -286,6 +289,77 @@ function logout(){
   renderLoginRoles();
   document.getElementById('login').classList.remove('hide');
 }
+
+/* ===== 구글 시트 동기화 (Apps Script 웹앱) =====
+   1) 아래 API_URL 에 Apps Script 배포 URL(.../exec)을 붙여넣으세요.
+   2) API_TOKEN 은 Apps Script 의 TOKEN 과 똑같이 맞추세요.
+   URL 이 비어 있으면 이 기기(localStorage)에만 저장됩니다. */
+const API_URL="";                 // 예: https://script.google.com/macros/s/AKfy.../exec
+const API_TOKEN="이촌2026";       // Apps Script TOKEN 과 동일하게
+
+let lastSynced={};                // 서버와 마지막으로 맞춘 버킷 상태
+let pushTimer=null;
+function setSync(t){const el=document.getElementById('syncStat');if(el)el.textContent=t;}
+async function api(payload){
+  payload.token=API_TOKEN;
+  const res=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
+  return await res.json();
+}
+// 선생님 1명분 데이터 묶기 (store 키: 이름|선생님|월, okepay 키: 선생님|월)
+function bucketTeacher(T){
+  const st={};Object.keys(store).forEach(k=>{if(k.split('|')[1]===T)st[k]=store[k];});
+  const op={};Object.keys(okepay).forEach(k=>{if(k.split('|')[0]===T)op[k]=okepay[k];});
+  return {store:st,okepay:op};
+}
+function bucketsNow(){
+  const out={};
+  TEACHERS.forEach(T=>{out['t:'+T]=JSON.stringify(bucketTeacher(T));});
+  out['custom']=JSON.stringify(custom);
+  return out;
+}
+function applyCloud(data){
+  store={};okepay={};custom=[];
+  Object.keys(data).forEach(key=>{
+    const v=data[key];if(v==null||v==='')return;
+    if(key==='custom'){try{custom=JSON.parse(v)||[];}catch(e){}}
+    else if(key.indexOf('t:')===0){try{const o=JSON.parse(v);Object.assign(store,o.store||{});Object.assign(okepay,o.okepay||{});}catch(e){}}
+  });
+}
+async function cloudLoad(){
+  if(!API_URL){setSync('이 기기 저장');return;}
+  setSync('불러오는 중…');
+  try{
+    const res=await api({action:'load'});
+    if(res&&res.ok){
+      const data=res.data||{};
+      if(Object.keys(data).length){
+        applyCloud(data);
+        if(!isAdmin())curTeacher=currentRole;
+        lastSynced=bucketsNow();         // 서버와 동일 상태로 기준 맞춤
+        save();render();
+        setSync('동기화됨 ✓');
+      }else{
+        // 시트가 비어 있으면 지금 로컬 데이터를 시드로 업로드
+        lastSynced={};
+        await cloudPush(true);
+      }
+    }else{setSync('연결 실패 · 로컬 사용');}
+  }catch(e){setSync('오프라인 · 로컬 사용');}
+}
+function schedulePush(){if(!API_URL)return;clearTimeout(pushTimer);pushTimer=setTimeout(()=>cloudPush(),900);}
+async function cloudPush(force){
+  if(!API_URL)return;
+  const now=bucketsNow();const updates={};
+  Object.keys(now).forEach(k=>{if(force||now[k]!==lastSynced[k])updates[k]=now[k];});
+  if(!Object.keys(updates).length){setSync('동기화됨 ✓');return;}
+  setSync('저장 중…');
+  try{
+    const res=await api({action:'save',updates});
+    if(res&&res.ok){Object.keys(updates).forEach(k=>lastSynced[k]=updates[k]);setSync('저장됨 ✓');}
+    else setSync('저장 실패');
+  }catch(e){setSync('저장 실패 · 로컬엔 보관');}
+}
+function cloudRefresh(){if(!API_URL){toast('이 기기 저장 모드입니다');return;}cloudLoad();}
 const fmt=n=>(Math.round(n)||0).toLocaleString('ko-KR');
 function wonKor(n){if(!n)return"0원";const s=n<0?"-":"";const a=Math.abs(n);const man=Math.floor(a/10000),ch=Math.floor((a%10000)/1000);let r=man>0?man+"만":"";r+=(a%10000>0)?ch+"천원":(man>0?"원":"원");return s+r;}
 const RATE=0.6;
@@ -308,7 +382,7 @@ function allRoster(){return ROSTER.concat(custom);}
 function studentsOf(t){return allRoster().filter(s=>s.teachers.includes(t)).map(s=>s.name).sort((a,b)=>a.localeCompare(b,'ko'));}
 function teachersOf(name){const s=allRoster().find(x=>x.name===name);return s?s.teachers:[];}
 function load(){try{const r=localStorage.getItem('lesson_form_v4');if(r){const o=JSON.parse(r);store=o.store||{};custom=o.custom||[];okepay=o.okepay||{};billMonth=o.billMonth||6;curTeacher=o.curTeacher||TEACHERS[1];}}catch(e){}}
-function save(){try{localStorage.setItem('lesson_form_v4',JSON.stringify({store,custom,okepay,billMonth,curTeacher}));}catch(e){}}
+function save(){try{localStorage.setItem('lesson_form_v4',JSON.stringify({store,custom,okepay,billMonth,curTeacher}));}catch(e){}schedulePush();}
 function lessons(m){let p=0,e=0,o=0;TYPES.forEach(t=>{const n=m.counts[t.id]||0;if(!n)return;const a=n*t.pr;if(t.kind==='p')p+=a;else if(t.kind==='e')e+=a;else o+=a;});o+=(m.book||0);return {personal:p,ensemble:e,other:o,base:p+e};}
 var _PR=Object.fromEntries(TYPES.map(x=>[x.id,x.pr]));
 function prevOkeYeon(name,t){const p=ent(name,t,prevMonth());return (p.counts.oke||0)*_PR.oke+(p.counts.yeon||0)*_PR.yeon;}
@@ -358,8 +432,8 @@ function selTeacher(v){if(!isAdmin())return;curTeacher=v.replace(/ \(\d+\)$/,'')
 function bumpMonth(d){billMonth=Math.min(12,Math.max(1,billMonth+d));render();}
 function setTab(t){curTab=t;render();}
 function selStu(nm){curStudent=nm;render();if(isMobile())mobView('edit');}
-function addStudent(){const nm=prompt('학생 이름을 입력하세요 ('+curTeacher+' 담당):');if(!nm)return;const ex=allRoster().find(s=>s.name===nm.trim());
-  if(ex){if(!ex.teachers.includes(curTeacher))ex.teachers.push(curTeacher);}else custom.push({name:nm.trim(),teachers:[curTeacher]});curStudent=nm.trim();render();}
+function addStudent(){let nm=prompt('학생 이름을 입력하세요 ('+curTeacher+' 담당):');if(!nm)return;nm=nm.trim().replace(/\|/g,'');if(!nm)return;const ex=allRoster().find(s=>s.name===nm);
+  if(ex){if(!ex.teachers.includes(curTeacher))ex.teachers.push(curTeacher);}else custom.push({name:nm,teachers:[curTeacher]});curStudent=nm;render();}
 function delStu(){const c=custom.find(x=>x.name===curStudent);if(!c)return;if(!confirm('추가한 학생 '+curStudent+' 삭제?'))return;custom=custom.filter(x=>x.name!==curStudent);curStudent=null;render();}
 function step(id,d){const m=ent(curStudent,curTeacher,activeMonth());m.counts[id]=Math.max(0,(m.counts[id]||0)+d);render();}
 function setN(id,v){const m=ent(curStudent,curTeacher,activeMonth());m.counts[id]=Math.max(0,parseInt(v)||0);render();}
