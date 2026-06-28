@@ -495,23 +495,25 @@ function detailText(name,t,mn){const m=ent(name,t,mn);const parts=[];
   TYPES.forEach(x=>{const n=m.counts[x.id]||0;if(n)parts.push(x.lab+' '+n+(x.id==='yeon'?'시간':'회'));});
   if(m.book)parts.push('책값 '+fmt(m.book)+'원');
   return parts.join(', ')||'-';}
-function carryNoteFull(name,t){const p=ent(name,t,prevMonth());const cv=carryTS(name,t);const dets=[];CARRY.forEach(x=>{const ab=p.absent[x.id]||0,ex=p.extra[x.id]||0;if(ab)dets.push(x.lab+' '+ab+'회 결석');if(ex)dets.push(x.lab+' '+ex+'회 추가');});if(!cv&&!dets.length)return'';return ' <span style="color:#b5532a">/ 이월 '+wonKor(cv)+(dets.length?' ('+dets.join(', ')+')':'')+'</span>';}
-function pdfSection(t,mn,mode,extra){extra=extra||0;const list=studentsOf(t);const rows=[];let total=0;const isPay=(mode==='pay');const showAmt=isPay;
+function carryNoteFull(name,t){const p=ent(name,t,prevMonth());const cv=carryTS(name,t);const dets=[];CARRY.forEach(x=>{const ab=p.absent[x.id]||0,ex=p.extra[x.id]||0;if(ab)dets.push(x.lab+' '+ab+'회 결석');if(ex)dets.push(x.lab+' '+ex+'회 추가');});if(!cv&&!dets.length)return'';return ' <span style="color:#555">/ 이월 '+wonKor(cv)+(dets.length?' ('+dets.join(', ')+')':'')+'</span>';}
+function pdfSection(t,mn,mode,extra){extra=extra||0;const list=studentsOf(t);const rows=[];let total=0;const isPay=(mode==='pay');const showAmt=isPay;const showFull=isPay&&isAdmin();let fullTotal=0;
   list.forEach(nm=>{const L=lessons(ent(nm,t,mn));const cv=carryTS(nm,t);const detail=detailText(nm,t,mn);const mm=ent(nm,t,mn);
     let amt;if(isPay){amt=Math.round(L.base*RATE);}else{amt=L.personal+L.ensemble+L.other+cv+prevOkeYeon(nm,t);}
+    const full=isPay?L.base:0;if(showFull)fullTotal+=full;
     if(detail==='-'&&!amt&&!cv&&!mm.memo&&!mm.dateP&&!mm.dateH&&!(mode==='bill'&&prevOkeYeon(nm,t)))return;total+=amt;
     const others=teachersOf(nm).filter(x=>x!==t);
     let cell=detail+(mode==='bill'?carryNoteFull(nm,t):'');
     if(mode==='bill'){const pp=ent(nm,t,prevMonth());const pv=prevOkeYeon(nm,t);if(pv){const bits=[];if(pp.counts.oke)bits.push('오케 '+pp.counts.oke+'회');if(pp.counts.yeon)bits.push('연습실 '+pp.counts.yeon+'시간');cell+='<div class="sub" style="color:#0e7a66">'+prevMonth()+'월 '+bits.join(', ')+' → 이번달 청구 '+fmt(pv)+'원</div>';}}
-    if(mm.memo)cell+='<div class="sub" style="color:#b5532a">비고: '+mm.memo+'</div>';
+    if(mm.memo)cell+='<div class="sub" style="color:#555">비고: '+mm.memo+'</div>';
     const dl=[];if(mm.dateP)dl.push('개인 '+mm.dateP);if(mm.dateH)dl.push('합주 '+mm.dateH);
     const dcell=dl.length?dl.join('<br>'):'—';
-    rows.push('<tr><td>'+nm+(others.length?' <span style="color:#b5532a;font-size:10px">(+'+others.join('/')+')</span>':'')+'</td><td>'+cell+'</td><td class="dcol">'+dcell+'</td>'+(showAmt?'<td class="num">'+fmt(amt)+'</td>':'')+'</tr>');});
-  if(isPay&&extra){rows.push('<tr><td>🎻 오케스트라 지도비</td><td>선생님 추가 지급</td><td class="dcol">—</td><td class="num">'+fmt(extra)+'</td></tr>');total+=extra;}
+    const amtCells=showAmt?((showFull?'<td class="num">'+fmt(full)+'</td>':'')+'<td class="num">'+fmt(amt)+'</td>'):'';
+    rows.push('<tr><td>'+nm+(others.length?' <span style="color:#555;font-size:10px">(+'+others.join('/')+')</span>':'')+'</td><td>'+cell+'</td><td class="dcol">'+dcell+'</td>'+amtCells+'</tr>');});
+  if(isPay&&extra){rows.push('<tr><td>🎻 오케스트라 지도비</td><td>선생님 추가 지급</td><td class="dcol">—</td>'+(showFull?'<td class="num">—</td>':'')+'<td class="num">'+fmt(extra)+'</td></tr>');total+=extra;}
   const amtHead=isPay?'6:4 지급(60%)':'';
-  const cap=isPay?(mn+'월 · 지난달 정산 (6:4 + 지도비) &nbsp;|&nbsp; 합계 '+fmt(total)+'원'):(mn+'월 · 이번달 레슨 기록 (날짜·내역)');
-  const head='<tr><th>학생</th><th>레슨 내역</th><th class="dcol">레슨 날짜</th>'+(showAmt?'<th class="num">'+amtHead+'</th>':'')+'</tr>';
-  const ncol=showAmt?4:3;
+  const cap=isPay?(mn+'월 · 지난달 정산 (6:4 + 지도비) &nbsp;|&nbsp; '+(showFull?'레슨비 합계 '+fmt(fullTotal)+'원 · 6:4 지급 합계 '+fmt(total)+'원':'합계 '+fmt(total)+'원')):(mn+'월 · 이번달 레슨 기록 (날짜·내역)');
+  const head='<tr><th>학생</th><th>레슨 내역</th><th class="dcol">레슨 날짜</th>'+(showAmt?((showFull?'<th class="num">레슨비(100%)</th>':'')+'<th class="num">'+amtHead+'</th>'):'')+'</tr>';
+  const ncol=showAmt?(showFull?5:4):3;
   const body=rows.join('')||'<tr><td colspan="'+ncol+'" style="text-align:center;color:#999">입력된 내역 없음</td></tr>';
   return '<h3>'+cap+'</h3><table><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';}
 function savePDF(){const t=curTeacher;const pm=prevMonth();const bm=billMonth;
