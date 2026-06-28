@@ -216,7 +216,7 @@ input.txt,select.txt{font-family:inherit;font-size:14px;border:1px solid var(--l
 <div class="ctl htabs"><button id="htabPrev" onclick="setTab('prev')">5월</button><button id="htabBill" onclick="setTab('bill')">6월</button></div>
 <div class="ctl" id="teacherCtl"><label>선생님</label><select id="teacherSel" onchange="selTeacher(this.value)"></select></div>
 <div class="ctl"><label>정산월</label><button onclick="bumpMonth(-1)">&minus;</button><b id="bm">6월</b><button onclick="bumpMonth(1)">+</button></div>
-<div class="ctl" id="whoCtl" style="gap:8px"><span id="whoLabel" style="font-weight:800;font-size:13px"></span><span id="syncStat" style="font-size:11px;color:var(--sub)"></span><button onclick="cloudRefresh()" title="시트에서 새로고침" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--mint-d)">새로고침</button><button id="logoutBtn" onclick="logout()" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--sub)">로그아웃</button></div>
+<div class="ctl" id="whoCtl" style="gap:8px"><span id="whoLabel" style="font-weight:800;font-size:13px"></span><span id="syncStat" style="font-size:11px;color:var(--sub)"></span><button onclick="cloudRefresh()" title="시트에서 새로고침" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--mint-d)">새로고침</button><span id="backupCtl" style="display:none;gap:6px;align-items:center"><button onclick="backupDownload()" title="백업 파일 내려받기" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--mint-d)">⬇ 백업</button><button onclick="backupRestore()" title="백업 파일에서 복원" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--sub)">⬆ 복원</button><input type="file" id="restoreFile" accept="application/json,.json" style="display:none" onchange="restoreFromFile(event)"></span><button id="logoutBtn" onclick="logout()" style="width:auto;padding:0 10px;height:26px;border-radius:8px;font-size:12px;color:var(--sub)">로그아웃</button></div>
 </div></header>
 <div class="layout"><div class="panel roster"><h2><span>학생 <span id="cnt"></span></span></h2><div id="roster"></div>
 <button class="add" onclick="addStudent()">+ 학생 추가</button>
@@ -278,6 +278,7 @@ function doLogin(role){
   document.getElementById('whoLabel').textContent=role+(isAdmin()?' (관리자)':' 선생님');
   document.getElementById('teacherCtl').style.display=isAdmin()?'':'none';   // 관리자만 선생님 전환
   const adminBtn=document.getElementById('adminBtn');if(adminBtn)adminBtn.style.display=isAdmin()?'':'none';
+  const bc=document.getElementById('backupCtl');if(bc)bc.style.display=isAdmin()?'inline-flex':'none';
   render();initMobile();
   cloudLoad();   // 구글 시트에서 최신 데이터 가져오기
 }
@@ -315,13 +316,15 @@ function bucketsNow(){
   const out={};
   TEACHERS.forEach(T=>{out['t:'+T]=JSON.stringify(bucketTeacher(T));});
   out['custom']=JSON.stringify(custom);
+  out['hidden']=JSON.stringify(hidden);
   return out;
 }
 function applyCloud(data){
-  store={};okepay={};custom=[];
+  store={};okepay={};custom=[];hidden=[];
   Object.keys(data).forEach(key=>{
     const v=data[key];if(v==null||v==='')return;
     if(key==='custom'){try{custom=JSON.parse(v)||[];}catch(e){}}
+    else if(key==='hidden'){try{hidden=JSON.parse(v)||[];}catch(e){}}
     else if(key.indexOf('t:')===0){try{const o=JSON.parse(v);Object.assign(store,o.store||{});Object.assign(okepay,o.okepay||{});}catch(e){}}
   });
 }
@@ -350,7 +353,10 @@ function schedulePush(){if(!API_URL)return;clearTimeout(pushTimer);pushTimer=set
 async function cloudPush(force){
   if(!API_URL)return;
   const now=bucketsNow();const updates={};
-  Object.keys(now).forEach(k=>{if(force||now[k]!==lastSynced[k])updates[k]=now[k];});
+  Object.keys(now).forEach(k=>{
+    if(k.indexOf('t:')===0){try{const o=JSON.parse(now[k]);if(o&&o.store&&Object.keys(o.store).length===0&&(!o.okepay||Object.keys(o.okepay).length===0))return;}catch(e){}}
+    if(force||now[k]!==lastSynced[k])updates[k]=now[k];
+  });
   if(!Object.keys(updates).length){setSync('동기화됨 ✓');return;}
   setSync('저장 중…');
   try{
@@ -373,16 +379,17 @@ const TYPES=[
 {id:'yeon',lab:'연습실',pr:5000,g:'add',kind:'o',msg:'연습실'}];
 const CARRY=[{id:'p60',lab:'개인60',pr:80000},{id:'p40',lab:'개인40',pr:50000},{id:'p30',lab:'개인30',pr:40000},{id:'p20',lab:'개인20',pr:30000},{id:'h1',lab:'합주1권',pr:20000},{id:'h2',lab:'합주2권',pr:30000},{id:'hap',lab:'일반합주',pr:40000}];
 let store={}, custom=[], okepay={}; // store[name|teacher|month]=monthData ; okepay[teacher|month]=오케지도비
+let hidden=[]; // 제거한 학생 'name|teacher' 목록
 let billMonth=6, curTab='bill', curTeacher=TEACHERS[1], curStudent=null;
 const prevMonth=()=>billMonth-1<1?12:billMonth-1, activeMonth=()=>curTab==='bill'?billMonth:prevMonth();
 function blankMonth(){return {counts:{},absent:{},extra:{},book:0,dateP:'',dateH:'',memo:''};}
 function key(name,t,mn){return name+'|'+t+'|'+mn;}
 function ent(name,t,mn){const k=key(name,t,mn);if(!store[k])store[k]=blankMonth();const m=store[k];if(!m.absent)m.absent={};if(!m.extra)m.extra={};return m;}
 function allRoster(){return ROSTER.concat(custom);}
-function studentsOf(t){return allRoster().filter(s=>s.teachers.includes(t)).map(s=>s.name).sort((a,b)=>a.localeCompare(b,'ko'));}
+function studentsOf(t){return allRoster().filter(s=>s.teachers.includes(t)).map(s=>s.name).filter(n=>!hidden.includes(n+'|'+t)).sort((a,b)=>a.localeCompare(b,'ko'));}
 function teachersOf(name){const s=allRoster().find(x=>x.name===name);return s?s.teachers:[];}
-function load(){try{const r=localStorage.getItem('lesson_form_v4');if(r){const o=JSON.parse(r);store=o.store||{};custom=o.custom||[];okepay=o.okepay||{};billMonth=o.billMonth||6;curTeacher=o.curTeacher||TEACHERS[1];}}catch(e){}}
-function save(){try{localStorage.setItem('lesson_form_v4',JSON.stringify({store,custom,okepay,billMonth,curTeacher}));}catch(e){}schedulePush();}
+function load(){try{const r=localStorage.getItem('lesson_form_v4');if(r){const o=JSON.parse(r);store=o.store||{};custom=o.custom||[];okepay=o.okepay||{};hidden=o.hidden||[];billMonth=o.billMonth||6;curTeacher=o.curTeacher||TEACHERS[1];}}catch(e){}}
+function save(){try{localStorage.setItem('lesson_form_v4',JSON.stringify({store,custom,okepay,hidden,billMonth,curTeacher}));}catch(e){}schedulePush();}
 function lessons(m){let p=0,e=0,o=0;TYPES.forEach(t=>{const n=m.counts[t.id]||0;if(!n)return;const a=n*t.pr;if(t.kind==='p')p+=a;else if(t.kind==='e')e+=a;else o+=a;});o+=(m.book||0);return {personal:p,ensemble:e,other:o,base:p+e};}
 var _PR=Object.fromEntries(TYPES.map(x=>[x.id,x.pr]));
 function prevOkeYeon(name,t){const p=ent(name,t,prevMonth());return (p.counts.oke||0)*_PR.oke+(p.counts.yeon||0)*_PR.yeon;}
@@ -419,7 +426,7 @@ function renderEditor(){const nm=curStudent;const el=document.getElementById('ed
     bar='<div class="tot pay"><div class="t"><b>'+fmt(L.personal)+'</b><span>개인</span></div><div class="t"><b>'+fmt(L.ensemble)+'</b><span>합주</span></div><div class="t grand"><b>'+fmt(pay)+'</b><span>'+prevMonth()+'월 6:4 지급(60%)</span></div></div>';}
   else{const L=lessons(m);const cv=carryTS(nm,curTeacher);const stuBill=billOf(nm);const myPart=L.personal+L.ensemble+L.other+cv;
     bar='<div class="tot bill"><div class="t"><b>'+fmt(L.personal)+'</b><span>개인</span></div><div class="t"><b>'+fmt(L.ensemble)+'</b><span>합주</span></div><div class="t"><b>'+fmt(cv)+'</b><span>이월</span></div>'+(others.length?'<div class="t"><b>'+fmt(myPart)+'</b><span>내 담당분</span></div>':'')+'<div class="t grand"><b>'+fmt(stuBill)+'</b><span>'+billMonth+'월 학생 총금액'+(others.length?' (전체 합산)':'')+'</span></div></div>';}
-  el.innerHTML='<button class="backbtn" onclick="mobView(\'list\')">&#8592; 학생 목록</button><div class="idrow"><span class="sname">'+nm+'</span>'+(others.length?'<span class="sbadge">분리수강: '+curTeacher+' + '+others.join(' + ')+'</span>':'<span class="sbadge" style="background:var(--mint-l);color:var(--mint-d)">담당: '+curTeacher+'</span>')+(custom.find(c=>c.name===nm)?'<button class="del" onclick="delStu()">삭제</button>':'')+'</div>'+
+  el.innerHTML='<button class="backbtn" onclick="mobView(\'list\')">&#8592; 학생 목록</button><div class="idrow"><span class="sname">'+nm+'</span>'+(others.length?'<span class="sbadge">분리수강: '+curTeacher+' + '+others.join(' + ')+'</span>':'<span class="sbadge" style="background:var(--mint-l);color:var(--mint-d)">담당: '+curTeacher+'</span>')+(isAdmin()?'<button class="del" onclick="delStu()">학생 제거</button>':'')+'</div>'+
     '<div class="tabs"><button class="tab '+(isPrev?'on':'')+'" onclick="setTab(\'prev\')">'+prevMonth()+'월<small>지난달 · 6:4</small></button><button class="tab '+(!isPrev?'on':'')+'" onclick="setTab(\'bill\')">'+billMonth+'월<small>이번달 · 청구</small></button></div>'+
     '<div class="grp-h">정규 '+(isPrev?'&mdash; 실제 한 횟수':'&mdash; 예정 횟수')+' ('+curTeacher+' 담당분)</div><div class="grid">'+reg+'</div>'+
     '<div class="grp-h addh">추가 항목</div><div class="grid">'+add+'</div>'+carrySection+
@@ -433,8 +440,8 @@ function bumpMonth(d){billMonth=Math.min(12,Math.max(1,billMonth+d));render();}
 function setTab(t){curTab=t;render();}
 function selStu(nm){curStudent=nm;render();if(isMobile())mobView('edit');}
 function addStudent(){let nm=prompt('학생 이름을 입력하세요 ('+curTeacher+' 담당):');if(!nm)return;nm=nm.trim().replace(/\|/g,'');if(!nm)return;const ex=allRoster().find(s=>s.name===nm);
-  if(ex){if(!ex.teachers.includes(curTeacher))ex.teachers.push(curTeacher);}else custom.push({name:nm,teachers:[curTeacher]});curStudent=nm;render();}
-function delStu(){const c=custom.find(x=>x.name===curStudent);if(!c)return;if(!confirm('추가한 학생 '+curStudent+' 삭제?'))return;custom=custom.filter(x=>x.name!==curStudent);curStudent=null;render();}
+  if(ex){if(!ex.teachers.includes(curTeacher))ex.teachers.push(curTeacher);}else custom.push({name:nm,teachers:[curTeacher]});hidden=hidden.filter(h=>h!==nm+'|'+curTeacher);curStudent=nm;render();}
+function delStu(){if(!isAdmin())return;const nm=curStudent;if(!nm)return;const isC=!!custom.find(x=>x.name===nm);if(!confirm(nm+' 학생을 '+curTeacher+' 목록에서 제거할까요?\n(입력값은 보관되며, 다시 추가하면 복구됩니다)'))return;if(isC){const c=custom.find(x=>x.name===nm);c.teachers=c.teachers.filter(t=>t!==curTeacher);if(!c.teachers.length)custom=custom.filter(x=>x.name!==nm);}else{const key=nm+'|'+curTeacher;if(!hidden.includes(key))hidden.push(key);}curStudent=null;render();if(isMobile())mobView('list');}
 function step(id,d){const m=ent(curStudent,curTeacher,activeMonth());m.counts[id]=Math.max(0,(m.counts[id]||0)+d);render();}
 function setN(id,v){const m=ent(curStudent,curTeacher,activeMonth());m.counts[id]=Math.max(0,parseInt(v)||0);render();}
 function stepCarry(kind,id,d){const m=ent(curStudent,curTeacher,prevMonth());const o=kind==='absent'?m.absent:m.extra;o[id]=Math.max(0,(o[id]||0)+d);render();}
@@ -443,6 +450,42 @@ function setWon(k,v){ent(curStudent,curTeacher,activeMonth())[k]=parseInt(v)||0;
 function setText(k,v){ent(curStudent,curTeacher,activeMonth())[k]=v;render();}
 function setOkePay(v){okepay[curTeacher+'|'+prevMonth()]=parseInt(v)||0;render();}
 function toast(t){const el=document.getElementById('toast');el.textContent=t;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1800);}
+function backupDownload(){
+  try{
+    const data={v:4,ts:new Date().toISOString(),store:store,custom:custom,okepay:okepay,hidden:hidden};
+    const blob=new Blob([JSON.stringify(data)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const d=new Date();const p=x=>String(x).padStart(2,'0');
+    const ds=d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes());
+    const a=document.createElement('a');a.href=url;a.download='레슨백업_'+ds+'.json';
+    document.body.appendChild(a);a.click();
+    setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},600);
+    const cnt=Object.keys(store||{}).length;
+    toast('백업 내려받음 ('+cnt+'건)');
+  }catch(e){toast('백업 실패');}
+}
+function backupRestore(){const f=document.getElementById('restoreFile');if(f){f.value='';f.click();}}
+function restoreFromFile(ev){
+  const file=ev.target.files&&ev.target.files[0];if(!file)return;
+  const rd=new FileReader();
+  rd.onload=function(){
+    try{
+      const o=JSON.parse(rd.result);
+      if(!o||typeof o!=='object'||!o.store){toast('올바른 백업 파일이 아니에요');return;}
+      const cnt=Object.keys(o.store||{}).length;
+      if(!confirm('백업을 복원할까요?\n학생 입력 '+cnt+'건을 현재 데이터에 합칩니다.\n(같은 항목은 백업 값으로 덮어씁니다)'))return;
+      Object.assign(store,o.store||{});
+      Object.assign(okepay,o.okepay||{});
+      const names=new Set((custom||[]).map(c=>c.name));
+      (o.custom||[]).forEach(c=>{if(c&&c.name&&!names.has(c.name)){custom.push(c);names.add(c.name);}});
+      const hs=new Set(hidden);(o.hidden||[]).forEach(h=>{if(h&&!hs.has(h)){hidden.push(h);hs.add(h);}});
+      save();render();
+      if(typeof cloudPush==='function')cloudPush(true);
+      toast('복원 완료! ('+cnt+'건 반영)');
+    }catch(e){toast('복원 실패: 파일을 읽을 수 없어요');}
+  };
+  rd.readAsText(file);
+}
 
 const YEAR=2026;
 let calOpen=null; // {field:'dateP'|'dateH'}
@@ -473,7 +516,7 @@ function fb(t,msg){const ta=document.createElement('textarea');ta.value=t;docume
 // 원장용: 학생별 1행 (모든 담당쌤 합산), 실제 6월 시트 52열
 const SHEET_COLS=['학생명','최종납부','바이올린 선생님','개인 60분','개인 40분','개인 30분','개인 20분','고급 60분','전공1','전공2','합주','2만원합주','3만원합주','특강1-3','특강4-6','특강고급','지난달 추가 60분','추가 40분','추가 30분','추가 20분','고급추가60분','전공1추가','전공2추가','추가합주','추가2만원합주','추가3만원합주','특강1-3추가','특강4-6추가','특강고급추가','지난달 결석_60분','결석_40분','결석_30분','결석_20분','결석_고급','전공1결석','전공2결석','결석_합주','결석_2만원합주','결석_3만원합주','결석특강1-3','결석특강4-6','결석특강고급','이월 금액','기본 레슨비','오케스트라','책값','지난달 연주비','연습실','지난달 기본레슨비','지난달 총 레슨비','총레슨비-지난달 기본','확인'];
 function adminRows(){const rows=[SHEET_COLS.join('\t')];
-  allRoster().forEach(s=>{const ts=s.teachers;if(!ts.length)return;
+  allRoster().forEach(s=>{const ts=s.teachers.filter(t=>!hidden.includes(s.name+'|'+t));if(!ts.length)return;
     // 합산
     const sum={};TYPES.forEach(t=>sum[t.id]=0);const ext={},abs={};CARRY.forEach(x=>{ext[x.id]=0;abs[x.id]=0;});let book=0,carry=0,base=0;let any=false;
     ts.forEach(t=>{const b=ent(s.name,t,billMonth),p=ent(s.name,t,prevMonth());
@@ -507,12 +550,13 @@ function pdfSection(t,mn,mode,extra){extra=extra||0;const list=studentsOf(t);con
     if(mm.memo)cell+='<div class="sub" style="color:#555">비고: '+mm.memo+'</div>';
     const dl=[];if(mm.dateP)dl.push('개인 '+mm.dateP);if(mm.dateH)dl.push('합주 '+mm.dateH);
     const dcell=dl.length?dl.join('<br>'):'—';
-    const amtCells=showAmt?((showFull?'<td class="num">'+fmt(full)+'</td>':'')+'<td class="num">'+fmt(amt)+'</td>'):'';
-    rows.push('<tr><td>'+nm+(others.length?' <span style="color:#555;font-size:10px">(+'+others.join('/')+')</span>':'')+'</td><td>'+cell+'</td><td class="dcol">'+dcell+'</td>'+amtCells+'</tr>');});
-  if(isPay&&extra){rows.push('<tr><td>🎻 오케스트라 지도비</td><td>선생님 추가 지급</td><td class="dcol">—</td>'+(showFull?'<td class="num">—</td>':'')+'<td class="num">'+fmt(extra)+'</td></tr>');total+=extra;}
+    const fullCell=showFull?'<td class="num">'+fmt(full)+'</td>':'';
+    const payCell=showAmt?'<td class="num">'+fmt(amt)+'</td>':'';
+    rows.push('<tr><td>'+nm+(others.length?' <span style="color:#555;font-size:10px">(+'+others.join('/')+')</span>':'')+'</td>'+fullCell+'<td>'+cell+'</td><td class="dcol">'+dcell+'</td>'+payCell+'</tr>');});
+  if(isPay&&extra){rows.push('<tr><td>🎻 오케스트라 지도비</td>'+(showFull?'<td class="num">—</td>':'')+'<td>선생님 추가 지급</td><td class="dcol">—</td><td class="num">'+fmt(extra)+'</td></tr>');total+=extra;}
   const amtHead=isPay?'6:4 지급(60%)':'';
   const cap=isPay?(mn+'월 · 지난달 정산 (6:4 + 지도비) &nbsp;|&nbsp; '+(showFull?'레슨비 합계 '+fmt(fullTotal)+'원 · 6:4 지급 합계 '+fmt(total)+'원':'합계 '+fmt(total)+'원')):(mn+'월 · 이번달 레슨 기록 (날짜·내역)');
-  const head='<tr><th>학생</th><th>레슨 내역</th><th class="dcol">레슨 날짜</th>'+(showAmt?((showFull?'<th class="num">레슨비(100%)</th>':'')+'<th class="num">'+amtHead+'</th>'):'')+'</tr>';
+  const head='<tr><th>학생</th>'+(showFull?'<th class="num">레슨비(100%)</th>':'')+'<th>레슨 내역</th><th class="dcol">레슨 날짜</th>'+(showAmt?'<th class="num">'+amtHead+'</th>':'')+'</tr>';
   const ncol=showAmt?(showFull?5:4):3;
   const body=rows.join('')||'<tr><td colspan="'+ncol+'" style="text-align:center;color:#999">입력된 내역 없음</td></tr>';
   return '<h3>'+cap+'</h3><table><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';}
