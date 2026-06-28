@@ -307,8 +307,10 @@ async function api(payload){
   return await res.json();
 }
 // 선생님 1명분 데이터 묶기 (store 키: 이름|선생님|월, okepay 키: 선생님|월)
+function entHasData(m){if(!m)return false;const any=o=>o&&Object.keys(o).some(k=>o[k]);return any(m.counts)||any(m.absent)||any(m.extra)||(m.book>0)||!!m.dateP||!!m.dateH||!!m.memo;}
 function bucketTeacher(T){
-  const st={};Object.keys(store).forEach(k=>{if(k.split('|')[1]===T)st[k]=store[k];});
+  // 빈(자동생성) 항목은 절대 올리지 않음 → 빈 값이 실제 입력을 덮어쓰는 사고 방지
+  const st={};Object.keys(store).forEach(k=>{if(k.split('|')[1]===T&&entHasData(store[k]))st[k]=store[k];});
   const op={};Object.keys(okepay).forEach(k=>{if(k.split('|')[0]===T)op[k]=okepay[k];});
   return {store:st,okepay:op};
 }
